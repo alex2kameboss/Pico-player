@@ -1,0 +1,19 @@
+{
+    "dockerComposeFile": [
+        "../compose.yaml"
+    ],
+    "service": "builder",
+    "customizations": {
+        "vscode": {
+            "workspaceFolder": "/workspace",
+            "extensions": [
+                "ms-vscode.cmake-tools",
+                "ms-vscode.cpptools",
+                "ms-vscode.cpptools-extension-pack",
+                "ms-vscode.cpptools-themes",
+                "twxs.cmake"
+            ]
+        }
+    },
+    "workspaceFolder": "/workspace"
+}
