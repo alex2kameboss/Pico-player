@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "pico/stdlib.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -16,6 +17,7 @@ void vBlinkTask0() {
 
 void vBlinkTask1() {
    for (;;) {
+      printf("LED1 BLINK!\n");
       gpio_put(LED1, 1);
       vTaskDelay(500);
       gpio_put(LED1, 0);
@@ -24,6 +26,9 @@ void vBlinkTask1() {
 }
 
 void main() {
+   // start uart
+   stdio_init_all();
+
    gpio_init(LED0);
    gpio_set_dir(LED0, GPIO_OUT);
 

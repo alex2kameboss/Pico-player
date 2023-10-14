@@ -22,5 +22,9 @@ target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 # pull in common dependencies
 target_link_libraries(app pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
 
+# enable uart@115200
+pico_enable_stdio_usb(app 1)
+pico_enable_stdio_uart(app 0)
+
 # create map/bin/hex/uf2 file etc.
 pico_add_extra_outputs(app)
