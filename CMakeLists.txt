@@ -15,7 +15,7 @@ set(CMAKE_CXX_STANDARD 17)
 # Initialize the SDK
 pico_sdk_init()
 
-add_executable(app main.c)
+add_executable(app main.cpp)
 
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR})
  
