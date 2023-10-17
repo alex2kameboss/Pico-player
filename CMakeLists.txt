@@ -8,6 +8,12 @@ include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 # Pull in FreeRTOS
 include($ENV{FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
 
+# Include Libs
+add_subdirectory(libs)
+
+# Include tests
+add_subdirectory(tests)
+
 project(app C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
@@ -17,10 +23,11 @@ pico_sdk_init()
 
 add_executable(app main.cpp)
 
-target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}
+                                PRIVATE ${CMAKE_CURRENT_LIST_DIR}/libs/include)
  
 # pull in common dependencies
-target_link_libraries(app pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
+target_link_libraries(app fatfs pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
 
 # enable uart@115200
 pico_enable_stdio_usb(app 1)
