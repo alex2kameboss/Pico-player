@@ -29,7 +29,16 @@
 
 #include "ff.h"		/* Obtains integer types for FatFs */
 #include "diskio.h"	/* Common include file for FatFs and disk I/O layer */
+#include "pico.h"
+#include "pico/stdlib.h"
+#include "hardware/spi.h"
+#include "hardware/clocks.h"
 
+spi_inst_t* spi = spi0;
+#define PIN_SCK		2
+#define PIN_MOSI	3
+#define PIN_MISO	4
+#define PIN_CS		5
 
 /*-------------------------------------------------------------------------*/
 /* Platform dependent macros and functions needed to be modified           */
@@ -47,40 +56,8 @@
 #define	CK_L()		(0x01 &	0x01)	/* Set MMC SCLK "low" */
 
 #define CS_INIT()	(0x01 &	0x01)	/* Initialize port for MMC CS as output */
-#define	CS_H()		(0x01 &	0x01)	/* Set MMC CS "high" */
-#define CS_L()		(0x01 &	0x01)	/* Set MMC CS "low" */
-
-
-static
-void dly_us (UINT n)	/* Delay n microseconds (avr-gcc -Os) */
-{
-	do {
-		(0x01 &	0x01);
-#if F_CPU >= 6000000
-		(0x01 &	0x01);
-#endif
-#if F_CPU >= 7000000
-		(0x01 &	0x01);
-#endif
-#if F_CPU >= 8000000
-		(0x01 &	0x01);
-#endif
-#if F_CPU >= 9000000
-		(0x01 &	0x01);
-#endif
-#if F_CPU >= 10000000
-		(0x01 &	0x01);
-#endif
-#if F_CPU >= 12000000
-		(0x01 &	0x01); (0x01 &	0x01);
-#endif
-#if F_CPU >= 14000000
-#error Too fast clock
-#endif
-	} while (--n);
-}
-
-
+#define	CS_H()		(0x01 &	0x01)		/* Set MMC CS "high" */
+#define CS_L()		(0x01 &	0x01)		/* Set MMC CS "low" */
 
 /*--------------------------------------------------------------------------
 
@@ -119,6 +96,53 @@ static
 BYTE CardType;			/* b0:MMC, b1:SDv1, b2:SDv2, b3:Block addressing */
 
 
+/* Exchange a byte */
+static
+BYTE xchg_spi (
+	BYTE dat	/* Data to send */
+)
+{
+	uint8_t *buff = (uint8_t *) &dat;
+	spi_write_read_blocking(spi, buff, buff, 1);
+	return (BYTE) *buff;
+}
+
+static inline void cs_select(uint cs_pin) {
+    asm volatile("nop \n nop \n nop"); // FIXME
+    gpio_put(cs_pin, 0);
+    asm volatile("nop \n nop \n nop"); // FIXME
+}
+
+static inline void cs_deselect(uint cs_pin) {
+    asm volatile("nop \n nop \n nop"); // FIXME
+    gpio_put(cs_pin, 1);
+    asm volatile("nop \n nop \n nop"); // FIXME
+}
+
+static inline uint32_t _millis(void)
+{
+    return to_ms_since_boot(get_absolute_time());
+}
+
+static void CS_HIGH(void)
+{
+    cs_deselect(PIN_CS);
+}
+
+static void CS_LOW(void)
+{
+    cs_select(PIN_CS);
+}
+
+static
+void rcvr_spi_multi (
+	BYTE *buff,		/* Pointer to data buffer */
+	UINT btr		/* Number of bytes to receive (even number) */
+)
+{
+	uint8_t *b = (uint8_t *) buff;
+	spi_read_blocking(spi, 0xff, b, btr);
+}
 
 /*-----------------------------------------------------------------------*/
 /* Transmit bytes to the card (bitbanging)                               */
@@ -199,19 +223,17 @@ void rcvr_mmc (
 /*-----------------------------------------------------------------------*/
 
 static
-int wait_ready (void)	/* 1:OK, 0:Timeout */
+int wait_ready (int wt)	/* 1:OK, 0:Timeout */
 {
 	BYTE d;
-	UINT tmr;
 
+	uint32_t t = _millis();
+	do {
+		d = xchg_spi(0xFF);
+		/* This loop takes a time. Insert rot_rdq() here for multitask envilonment. */
+	} while (d != 0xFF && _millis() < t + wt);	/* Wait for card goes ready or timeout */
 
-	for (tmr = 5000; tmr; tmr--) {	/* Wait for ready in timeout of 500ms */
-		rcvr_mmc(&d, 1);
-		if (d == 0xFF) break;
-		dly_us(100);
-	}
-
-	return tmr ? 1 : 0;
+	return (d == 0xFF) ? 1 : 0;
 }
 
 
@@ -223,10 +245,8 @@ int wait_ready (void)	/* 1:OK, 0:Timeout */
 static
 void deselect (void)
 {
-	BYTE d;
-
-	CS_H();				/* Set CS# high */
-	rcvr_mmc(&d, 1);	/* Dummy clock (force DO hi-z for multiple slave SPI) */
+	CS_HIGH();		/* Set CS# high */
+	xchg_spi(0xFF);	/* Dummy clock (force DO hi-z for multiple slave SPI) */
 }
 
 
@@ -238,14 +258,12 @@ void deselect (void)
 static
 int select (void)	/* 1:OK, 0:Timeout */
 {
-	BYTE d;
-
-	CS_L();				/* Set CS# low */
-	rcvr_mmc(&d, 1);	/* Dummy clock (force DO enabled) */
-	if (wait_ready()) return 1;	/* Wait for card ready */
+	CS_LOW();		/* Set CS# low */
+	xchg_spi(0xFF);	/* Dummy clock (force DO enabled) */
+	if (wait_ready(500)) return 1;	/* Wait for card ready */
 
 	deselect();
-	return 0;			/* Failed */
+	return 0;	/* Timeout */
 }
 
 
@@ -260,21 +278,20 @@ int rcvr_datablock (	/* 1:OK, 0:Failed */
 	UINT btr			/* Byte count */
 )
 {
-	BYTE d[2];
-	UINT tmr;
+	BYTE token;
 
+	const uint32_t timeout = 200;
+	uint32_t t = _millis();
+	do {							/* Wait for DataStart token in timeout of 200ms */
+		token = xchg_spi(0xFF);
+		/* This loop will take a time. Insert rot_rdq() here for multitask envilonment. */
+	} while (token == 0xFF && _millis() < t + timeout);
+	if(token != 0xFE) return 0;		/* Function fails if invalid DataStart token or timeout */
 
-	for (tmr = 1000; tmr; tmr--) {	/* Wait for data packet in timeout of 100ms */
-		rcvr_mmc(d, 1);
-		if (d[0] != 0xFF) break;
-		dly_us(100);
-	}
-	if (d[0] != 0xFE) return 0;		/* If not valid data token, return with error */
+	rcvr_spi_multi(buff, btr);		/* Store trailing data to the buffer */
+	xchg_spi(0xFF); xchg_spi(0xFF);			/* Discard CRC */
 
-	rcvr_mmc(buff, btr);			/* Receive the data block into buffer */
-	rcvr_mmc(d, 2);					/* Discard CRC */
-
-	return 1;						/* Return with success */
+	return 1;							/* Return with success */
 }
 
 
@@ -292,14 +309,13 @@ int xmit_datablock (	/* 1:OK, 0:Failed */
 	BYTE d[2];
 
 
-	if (!wait_ready()) return 0;
+	if (!wait_ready(500)) return 0;
 
-	d[0] = token;
-	xmit_mmc(d, 1);				/* Xmit a token */
+	xchg_spi(token);
 	if (token != 0xFD) {		/* Is it data token? */
 		xmit_mmc(buff, 512);	/* Xmit the 512 byte data block to MMC */
-		rcvr_mmc(d, 2);			/* Xmit dummy CRC (0xFF,0xFF) */
-		rcvr_mmc(d, 1);			/* Receive data response */
+		xchg_spi(0xFF);			/* Xmit dummy CRC (0xFF,0xFF) */
+		xchg_spi(0xFF);			/* Receive data response */
 		if ((d[0] & 0x1F) != 0x05)	/* If not accepted, return with error */
 			return 0;
 	}
@@ -319,7 +335,7 @@ BYTE send_cmd (		/* Returns command response (bit7==1:Send failed)*/
 	DWORD arg		/* Argument */
 )
 {
-	BYTE n, d, buf[6];
+	BYTE n, d;
 
 
 	if (cmd & 0x80) {	/* ACMD<n> is the command sequense of CMD55-CMD<n> */
@@ -335,22 +351,21 @@ BYTE send_cmd (		/* Returns command response (bit7==1:Send failed)*/
 	}
 
 	/* Send a command packet */
-	buf[0] = 0x40 | cmd;			/* Start + Command index */
-	buf[1] = (BYTE)(arg >> 24);		/* Argument[31..24] */
-	buf[2] = (BYTE)(arg >> 16);		/* Argument[23..16] */
-	buf[3] = (BYTE)(arg >> 8);		/* Argument[15..8] */
-	buf[4] = (BYTE)arg;				/* Argument[7..0] */
+	xchg_spi(0x40 | cmd);			/* Start + Command index */
+	xchg_spi((BYTE)(arg >> 24));		/* Argument[31..24] */
+	xchg_spi((BYTE)(arg >> 16));		/* Argument[23..16] */
+	xchg_spi((BYTE)(arg >> 8));		/* Argument[15..8] */
+	xchg_spi((BYTE)arg);				/* Argument[7..0] */
 	n = 0x01;						/* Dummy CRC + Stop */
 	if (cmd == CMD0) n = 0x95;		/* (valid CRC for CMD0(0)) */
 	if (cmd == CMD8) n = 0x87;		/* (valid CRC for CMD8(0x1AA)) */
-	buf[5] = n;
-	xmit_mmc(buf, 6);
+	xchg_spi(n);
 
 	/* Receive command response */
-	if (cmd == CMD12) rcvr_mmc(&d, 1);	/* Skip a stuff byte when stop reading */
+	if (cmd == CMD12) xchg_spi(0xFF);	/* Skip a stuff byte when stop reading */
 	n = 10;								/* Wait for a valid response in timeout of 10 attempts */
 	do
-		rcvr_mmc(&d, 1);
+		d = xchg_spi(0xFF);
 	while ((d & 0x80) && --n);
 
 	return d;			/* Return with the response value */
@@ -391,43 +406,47 @@ DSTATUS disk_initialize (
 	BYTE n, ty, cmd, buf[4];
 	UINT tmr;
 	DSTATUS s;
+	const uint32_t timeout = 1000; /* Initialization timeout = 1 sec */
+	uint32_t t;
+
 
 
 	if (drv) return RES_NOTRDY;
 
-	dly_us(10000);			/* 10ms */
-	CS_INIT(); CS_H();		/* Initialize port pin tied to CS */
-	CK_INIT(); CK_L();		/* Initialize port pin tied to SCLK */
-	DI_INIT();				/* Initialize port pin tied to DI */
-	DO_INIT();				/* Initialize port pin tied to DO */
+	//dly_us(10000);			/* 10ms */
 
-	for (n = 10; n; n--) rcvr_mmc(buf, 1);	/* Apply 80 dummy clocks and the card gets ready to receive command */
+	gpio_set_function(PIN_SCK, GPIO_FUNC_SPI);
+	gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
+	gpio_set_function(PIN_MISO, GPIO_FUNC_SPI);
+	gpio_set_function(PIN_CS, GPIO_FUNC_SPI);
+
+	spi_init(spi, 100 * KHZ);
+
+	spi_set_format(spi, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+
+
+	for (n = 10; n; n--) xchg_spi(0xFF);	/* Apply 80 dummy clocks and the card gets ready to receive command */
 
 	ty = 0;
-	if (send_cmd(CMD0, 0) == 1) {			/* Enter Idle state */
+	if (send_cmd(CMD0, 0) == 1) {			/* Put the card SPI/Idle state */
+		t = _millis();
 		if (send_cmd(CMD8, 0x1AA) == 1) {	/* SDv2? */
-			rcvr_mmc(buf, 4);							/* Get trailing return value of R7 resp */
-			if (buf[2] == 0x01 && buf[3] == 0xAA) {		/* The card can work at vdd range of 2.7-3.6V */
-				for (tmr = 1000; tmr; tmr--) {			/* Wait for leaving idle state (ACMD41 with HCS bit) */
-					if (send_cmd(ACMD41, 1UL << 30) == 0) break;
-					dly_us(1000);
-				}
-				if (tmr && send_cmd(CMD58, 0) == 0) {	/* Check CCS bit in the OCR */
-					rcvr_mmc(buf, 4);
-					ty = (buf[0] & 0x40) ? CT_SDC2 | CT_BLOCK : CT_SDC2;	/* SDv2+ */
+			for (n = 0; n < 4; n++) buf[n] = xchg_spi(0xFF);	/* Get 32 bit return value of R7 resp */
+			if (buf[2] == 0x01 && buf[3] == 0xAA) {				/* Is the card supports vcc of 2.7-3.6V? */
+				while (_millis() < t + timeout && send_cmd(ACMD41, 1UL << 30)) ;	/* Wait for end of initialization with ACMD41(HCS) */
+				if (_millis() < t + timeout && send_cmd(CMD58, 0) == 0) {		/* Check CCS bit in the OCR */
+					for (n = 0; n < 4; n++) buf[n] = xchg_spi(0xFF);
+					ty = (buf[0] & 0x40) ? CT_SDC2 | CT_BLOCK : CT_SDC2;	/* Card id SDv2 */
 				}
 			}
-		} else {							/* SDv1 or MMCv3 */
-			if (send_cmd(ACMD41, 0) <= 1) 	{
-				ty = CT_SDC2; cmd = ACMD41;	/* SDv1 */
+		} else {	/* Not SDv2 card */
+			if (send_cmd(ACMD41, 0) <= 1) 	{	/* SDv1 or MMC? */
+				ty = CT_SDC1; cmd = ACMD41;	/* SDv1 (ACMD41(0)) */
 			} else {
-				ty = CT_MMC3; cmd = CMD1;	/* MMCv3 */
+				ty = CT_MMC; cmd = CMD1;	/* MMCv3 (CMD1(0)) */
 			}
-			for (tmr = 1000; tmr; tmr--) {			/* Wait for leaving idle state */
-				if (send_cmd(cmd, 0) == 0) break;
-				dly_us(1000);
-			}
-			if (!tmr || send_cmd(CMD16, 512) != 0)	/* Set R/W block length to 512 */
+			while (_millis() < t + timeout && send_cmd(cmd, 0)) ;		/* Wait for end of initialization */
+			if (_millis() >= t + timeout || send_cmd(CMD16, 512) != 0)	/* Set block length: 512 */
 				ty = 0;
 		}
 	}
