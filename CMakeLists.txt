@@ -3,16 +3,11 @@ cmake_minimum_required(VERSION 3.13)
 file(MAKE_DIRECTORY "build")
 
 # Pull in SDK (must be before project)
+set(PICO_BOARD pico_w)
 include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 
 # Pull in FreeRTOS
 include($ENV{FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
-
-# Include Libs
-add_subdirectory(libs)
-
-# Include tests
-add_subdirectory(tests)
 
 project(app C CXX ASM)
 set(CMAKE_C_STANDARD 11)
@@ -35,3 +30,11 @@ pico_enable_stdio_uart(app 0)
 
 # create map/bin/hex/uf2 file etc.
 pico_add_extra_outputs(app)
+
+include_directories($ENV{PICO_SDK_PATH}/src/rp2_common/hardware_spi/include)
+
+# Include Libs
+add_subdirectory(libs)
+
+# Include tests
+add_subdirectory(tests)
