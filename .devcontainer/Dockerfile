@@ -10,8 +10,7 @@ WORKDIR freertos-pico
 
 RUN git clone https://github.com/RaspberryPi/pico-sdk --recurse-submodules
 RUN git clone -b smp https://github.com/FreeRTOS/FreeRTOS-Kernel --recurse-submodules
-RUN git clone https://github.com/raspberrypi/pico-extras.git --recurse-submodules
 ENV PICO_SDK_PATH /freertos-pico/pico-sdk
 ENV FREERTOS_KERNEL_PATH /freertos-pico/FreeRTOS-Kernel
-ENV PICO_EXTRAS_PATH /freertos-pico/pico-extras
+
 WORKDIR /workspace
