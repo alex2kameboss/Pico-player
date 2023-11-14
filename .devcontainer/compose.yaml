@@ -5,5 +5,7 @@ services:
   build: .
   stdin_open: true
   tty: true
+  privileged: true
   volumes:
     - ../:/workspace
+    - /dev/bus/usb:/dev/bus/usb
