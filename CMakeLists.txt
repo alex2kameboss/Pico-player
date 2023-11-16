@@ -6,6 +6,8 @@ file(MAKE_DIRECTORY "build")
 set(PICO_BOARD pico_w)
 include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 
+include($ENV{PICO_EXTRAS_PATH}/external/pico_extras_import.cmake)
+
 # Pull in FreeRTOS
 include($ENV{FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
 
@@ -31,7 +33,7 @@ pico_enable_stdio_uart(app 0)
 # create map/bin/hex/uf2 file etc.
 pico_add_extra_outputs(app)
 
-include_directories($ENV{PICO_SDK_PATH}/src/rp2_common/hardware_spi/include)
+include_directories(libs/include)
 
 # Include Libs
 add_subdirectory(libs)
