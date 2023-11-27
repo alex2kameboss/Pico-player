@@ -132,8 +132,8 @@ int main() {
 
 
                                 for (int i = 0; i < buffer->sample_count; i++) {
-                                    samples[i*2+0] = buf[i*2+0];
-                                    samples[i*2+1] = buf[i*2+1];
+                                    samples[i*2+0] = buf[i*2+0] / 4;
+                                    samples[i*2+1] = buf[i*2+1] / 4;
                                 }
 
                                 // printf("Play buf\n");
