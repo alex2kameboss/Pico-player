@@ -24,7 +24,7 @@ target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}
                                 PRIVATE ${CMAKE_CURRENT_LIST_DIR}/libs/include)
  
 # pull in common dependencies
-target_link_libraries(app fatfs pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
+target_link_libraries(app fatfs pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4 pico_audio_i2s mp3_decoder)
 
 # enable uart@115200
 pico_enable_stdio_usb(app 1)
