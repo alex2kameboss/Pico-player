@@ -24,7 +24,21 @@ target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}
                                 PRIVATE ${CMAKE_CURRENT_LIST_DIR}/libs/include)
  
 # pull in common dependencies
-target_link_libraries(app fatfs pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4 pico_audio_i2s mp3_decoder)
+target_link_libraries(app 
+    pico_cyw43_arch_lwip_sys_freertos
+    fatfs 
+    pico_stdlib 
+    pico_lwip_iperf
+    FreeRTOS-Kernel 
+    FreeRTOS-Kernel-Heap4 
+    pico_audio_i2s 
+    mp3_decoder
+    messages)
+
+target_compile_definitions(app PRIVATE
+    WIFI_SSID=\"eror\"
+    WIFI_PASSWORD=\"AnaAre1Mere\"
+    NO_SYS=0)
 
 # enable uart@115200
 pico_enable_stdio_usb(app 1)
