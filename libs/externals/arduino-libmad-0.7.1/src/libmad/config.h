@@ -135,13 +135,8 @@
 /* Define to `int' if <sys/types.h> does not define. */
 /* #undef pid_t */
 
-#if defined(__arm__)	&& !defined(ARDUINO)
-# define FPM_ARM
-#elif defined(_X64_)
-# define FPM_INTEL
-#else
 #define FPM_DEFAULT
-#endif
+
 
 /// Move major data from the stack to the heap
 #define MAD_STACK_HACK 1

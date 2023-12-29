@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <climits>
 #include <cassert>
+#include <cstring>
+#include <algorithm>
 
 namespace libmad {
 
@@ -202,13 +204,13 @@ class MP3DecoderMAD  {
                 size_t start = 0;
                 uint8_t* ptr8 = (uint8_t* )in_ptr;
                 // we can not write more then the AAC_MAX_FRAME_SIZE 
-                size_t write_len = min(in_size, max_buffer_size);
+                size_t write_len = std::min(in_size, max_buffer_size);
                 while(start<in_size){
                     // we have some space left in the buffer
                     int written_len = writeFrame(ptr8+start, write_len);
                     start += written_len;
                     LOG(Info,"-> Written %zu of %zu", start, in_size);
-                    write_len = min(in_size - start, max_buffer_size);
+                    write_len = std::min(in_size - start, max_buffer_size);
     #ifdef ARDUINO                    
                     yield();
     #endif
@@ -284,7 +286,7 @@ class MP3DecoderMAD  {
         size_t appendToBuffer(const void *in_ptr, int in_size){
             LOG(Info, "appendToBuffer: %d (at %p)", in_size, buffer.data);
             int buffer_size_old = buffer.size;
-            int process_size = min((int)(maxFrameSize() - buffer.size), in_size);
+            int process_size = std::min((int)(maxFrameSize() - buffer.size), in_size);
             memmove(buffer.data+buffer.size, in_ptr, process_size); 
             buffer.size += process_size;
             assert(buffer.size<=maxFrameSize());
@@ -304,7 +306,6 @@ class MP3DecoderMAD  {
             if(r.start>=0 && r.end>r.start){
                 decode(r);
             } 
-            yield();
             frame_counter++;
             return result;
         }
