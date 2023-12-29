@@ -32,7 +32,7 @@ target_link_libraries(app
     FreeRTOS-Kernel 
     FreeRTOS-Kernel-Heap4 
     pico_audio_i2s 
-    mp3_decoder
+    arduino_libmad
     messages)
 
 target_compile_definitions(app PRIVATE

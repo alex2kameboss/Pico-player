@@ -10,9 +10,11 @@
 FATFS fs;
 
 // for MP3
-#include <mp3_decoder/mp3_decoder.h>
 #include <cstring>
 #define BUF_MAX 2 * 1024
+#define MAX_DECODE_BUF 2 * BUF_MAX + 1024
+#define MAD_MAX_RESULT_BUFFER_SIZE 1152
+#include <MP3DecoderMAD.h>
 
 // for I2S
 #include <pico/audio_i2s.h>
@@ -106,9 +108,9 @@ static void sd(void *pvParameters) {
     FRESULT fr;
     UINT read_size;
 
-    //xSemaphoreTake(songNameSemaphore, portMAX_DELAY);
+    xSemaphoreTake(songNameSemaphore, portMAX_DELAY);
     responseSongMessage.setSongName("test.mp3");
-    //xSemaphoreGive(songNameSemaphore);
+    xSemaphoreGive(songNameSemaphore);
 
     fr = f_open(&fil, "test.mp3", FA_READ);
 
@@ -132,64 +134,35 @@ static void sd(void *pvParameters) {
     }
 }
 
+void pcmDataCallback(libmad::MadAudioInfo &info, int16_t *pwm_buffer, size_t len) {
+    if (len == 1152) {
+        xQueueSend(mp3ToI2s, pwm_buffer, portMAX_DELAY);
+    }
+}
+
+
 static void mp3(void *pvParameters) {
-    unsigned char decode_buf[BUF_MAX * 2];
-    int16_t buf_s16[1152];
-    int skip = 0;
+    unsigned char decode_buf[MAX_DECODE_BUF];
     int buf_size = 0;
     unsigned char input_buf[BUF_MAX];
     UINT read_size;
+    unsigned int jump;
+    libmad::MP3DecoderMAD mp3(pcmDataCallback);
+    mp3.begin();
 
     while (true) {
         xQueueReceive(sdToMp3Size, &read_size, portMAX_DELAY);
         xQueueReceive(sdToMp3Data, input_buf, portMAX_DELAY);
 
-        if (buf_size == 0) {
-            memcpy(decode_buf, input_buf, read_size);
-            buf_size += read_size;
-        } else {
-            if (read_size > 0) {
-                memcpy(decode_buf + BUF_MAX, input_buf, read_size);
-                buf_size += read_size;
-            }
-            while (true) {
-                //printf("Skip: %d\n", skip);
-                int next_sync = MP3FindSyncWord(decode_buf + skip, buf_size - skip);
-                if (next_sync == -1) {
-                    //printf("Syncword not found\n");
-                    skip = BUF_MAX;
-                } else if (next_sync == 0) {
-                    int bytesLeft = buf_size - skip;
-                    //printf("Decode frame\n");
-                    int ret = MP3Decode(decode_buf + skip, &bytesLeft, buf_s16, 0);
-                    if (buf_size - skip == bytesLeft) {
-                        //printf("Miss syncword\n");
-                        skip += 2; // miss sync bytes, skipt 2 bytes and search again
-                    } else {
-                        skip += buf_size - skip - bytesLeft;
-
-                        if (ret == 0) {
-                            // TODO: sent buf_s16 to i2s
-                            xQueueSend(mp3ToI2s, &buf_s16, portMAX_DELAY);
-                        } else {
-                            //printf("Decode error: %d\n", ret);
-                        }
-                    }
-                } else {
-                    //printf("Skip frame\n");
-                    skip += next_sync;
-                }
-            
-                //printf("samples: %d, frame: %d\n", samples, info.frame_bytes);
-                if (skip >= BUF_MAX) {
-                    //printf("Reach buf limit\n");
-                    memcpy(decode_buf, decode_buf + BUF_MAX, BUF_MAX);
-                    skip -= BUF_MAX;
-                    buf_size -= BUF_MAX;
-                    break;
-                }
-            }
+        if (buf_size + read_size >= MAX_DECODE_BUF) {
+            jump = mp3.give_data(decode_buf, buf_size);
+            if (jump == 0)
+                jump = BUF_MAX;
+            buf_size -= BUF_MAX;
+            memcpy(decode_buf, decode_buf + jump, buf_size);
         }
+        memcpy(decode_buf + buf_size, input_buf, read_size);
+        buf_size += read_size;   
     }
 
 }
@@ -200,30 +173,20 @@ static void i2s(void *pvParameters) {
         // TODO: get pcm16 buffer
         xQueueReceive(mp3ToI2s, &buf_s16, portMAX_DELAY);
 
-        int play = 1152;
-        while (play > 0) {
-            // printf("Create buf %d\n", play);
-            audio_buffer_t *buffer = take_audio_buffer(ap, true);
-            int16_t* samples = (int16_t*) buffer->buffer->bytes;
-            int16_t* buf = buf_s16 + (1152 - play);
-
-            if (play >= buffer->max_sample_count) {
-                buffer->sample_count = buffer->max_sample_count;
-                play -= buffer->max_sample_count;
-            } else {
-                buffer->sample_count = play;
-                play = 0;
+        audio_buffer_t *buffer = take_audio_buffer(ap, true);
+        int16_t* samples = (int16_t*) buffer->buffer->bytes;
+        buffer->sample_count = 0;
+        for (size_t i = 0; i < 1152; ++i){
+            if (buffer->sample_count == buffer->max_sample_count) {
+                give_audio_buffer(ap, buffer);
+                buffer = take_audio_buffer(ap, true);
+                samples = (int16_t*) buffer->buffer->bytes;
+                buffer->sample_count = 0;
             }
-
-
-            for (int i = 0; i < buffer->sample_count; i++) {
-                samples[i*2+0] = buf[i*2+0] / 4;
-                samples[i*2+1] = buf[i*2+1] / 4;
-            }
-
-            // printf("Play buf\n");
-            give_audio_buffer(ap, buffer);
+            samples[i] = buf_s16[i];
+            buffer->sample_count++;
         }
+        give_audio_buffer(ap, buffer);
     }
 }
 
@@ -282,9 +245,9 @@ static void wifi(void *pvParameters) {
             IMessage* clientMessage = r(conn_sock);
 
             if (clientMessage->getType() == MsgId::REQ_SONG) {
-                //xSemaphoreTake(songNameSemaphore, portMAX_DELAY);
+                xSemaphoreTake(songNameSemaphore, portMAX_DELAY);
                 s(conn_sock, &responseSongMessage);
-                //xSemaphoreGive(songNameSemaphore);
+                xSemaphoreGive(songNameSemaphore);
             }
 
             close(conn_sock);
@@ -309,13 +272,12 @@ int main() {
     mp3ToI2s = xQueueCreate(2, 1152 * 2);
 
     // create tasks
-    xTaskCreate(sd, "SD", 4 * BUF_MAX + 256, NULL, 30, &sdTask);
-    xTaskCreate(mp3, "MP3", 5 * BUF_MAX + 256, NULL, 30, &mp3Task);
-    xTaskCreate(i2s, "I2S", 1152 * 2 + 256, NULL, 30, &i2sTask);
-    xTaskCreate(wifi, "WiFi", 300, NULL, 31, &wifiTask);
-
+    xTaskCreate(sd, "SD", 2 * BUF_MAX + 256, NULL, 30, &sdTask);
+    xTaskCreate(mp3, "MP3", MAX_DECODE_BUF + BUF_MAX + 1024 + 1152 + 256, NULL, 30, &mp3Task);
+    xTaskCreate(i2s, "I2S", 1152 * 2 + 256, NULL, 31, &i2sTask);
+    xTaskCreate(wifi, "WiFi", 300, NULL, 30, &wifiTask);
     // create semaphore
-    //songNameSemaphore = xSemaphoreCreateBinary();
+    songNameSemaphore = xSemaphoreCreateMutex();
 
     // start OS
     vTaskStartScheduler();
