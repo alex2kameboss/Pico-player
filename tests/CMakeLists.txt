@@ -11,7 +11,7 @@ pico_add_extra_outputs(sd_test)
 
 project(mp3_test C CXX ASM)
 add_executable(mp3_test mp3_test.cpp)
-target_link_libraries(mp3_test fatfs pico_stdlib pico_audio_i2s mp3_decoder)
+target_link_libraries(mp3_test fatfs pico_stdlib pico_audio_i2s arduino_libmad)
 
 # enable uart@115200
 pico_enable_stdio_usb(mp3_test 1)

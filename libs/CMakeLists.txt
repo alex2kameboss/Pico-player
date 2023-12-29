@@ -9,3 +9,5 @@ project(mp3_decoder CXX)
 add_library(mp3_decoder STATIC src/mp3_decoder/mp3_decoder.cpp)
 target_include_directories(mp3_decoder PRIVATE include/mp3_decoder)
 target_link_libraries(mp3_decoder pico_stdlib)
+
+add_subdirectory(externals/arduino-libmad-0.7.1)

@@ -34,6 +34,7 @@ pico_enable_stdio_uart(app 0)
 pico_add_extra_outputs(app)
 
 include_directories(libs/include)
+include_directories(libs/externals/arduino-libmad-0.7.1/src)
 
 # Include Libs
 add_subdirectory(libs)
