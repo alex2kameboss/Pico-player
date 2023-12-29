@@ -27,7 +27,8 @@ target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}
 target_link_libraries(app 
     pico_cyw43_arch_lwip_sys_freertos
     fatfs 
-    pico_stdlib 
+    pico_stdlib
+    pico_multicore 
     pico_lwip_iperf
     FreeRTOS-Kernel 
     FreeRTOS-Kernel-Heap4 

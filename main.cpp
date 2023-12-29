@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
@@ -35,8 +36,18 @@ QueueHandle_t sdToMp3Data, sdToMp3Size, mp3ToI2s;
 
 static TaskHandle_t sdTask = NULL, mp3Task = NULL, i2sTask = NULL, wifiTask = NULL;
 
-SemaphoreHandle_t songNameSemaphore;
+SemaphoreHandle_t songNameSemaphore, printfMutex;
 ResponseSongMessage responseSongMessage("Not playing!");
+
+#include <cstdarg>
+void locking_printf(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    xSemaphoreTake(printfMutex, portMAX_DELAY);
+    vprintf(format, args);
+    xSemaphoreGive(printfMutex);
+    va_end(args);
+}
 
 struct audio_buffer_pool *init_audio() {
 
@@ -102,34 +113,46 @@ void init() {
 
 static void sd(void *pvParameters) {
     unsigned char input_buf[BUF_MAX];
-    int file_size = 0;
 
     FIL fil;
     FRESULT fr;
     UINT read_size;
-
-    xSemaphoreTake(songNameSemaphore, portMAX_DELAY);
-    responseSongMessage.setSongName("test.mp3");
-    xSemaphoreGive(songNameSemaphore);
-
-    fr = f_open(&fil, "test.mp3", FA_READ);
+    DIR dir;
+    FILINFO fno;
 
     while (true) {
-        f_read(&fil, input_buf, BUF_MAX, &read_size);
+        fr = f_findfirst(&dir, &fno, "/", "*.mp3");
+        if (fr == FR_OK) {
+            while (fr == FR_OK && fno.fname[0]) {
+                fr = f_open(&fil, fno.fname, FA_READ);
+                if (fr == FR_OK) {
+                    locking_printf("%s\n", fno.fname);
 
-        // TODO: send data to mp3 deccode
-        xQueueSend(sdToMp3Size, &read_size, portMAX_DELAY);
-        xQueueSend(sdToMp3Data, input_buf, portMAX_DELAY);
+                    xSemaphoreTake(songNameSemaphore, portMAX_DELAY);
+                    responseSongMessage.setSongName(fno.fname);
+                    xSemaphoreGive(songNameSemaphore);
 
-        file_size += read_size;
-        if (read_size < BUF_MAX) {
-            if (f_eof(&fil)) {
-                //printf("EOF reach\n");
-            } else {
-                //printf("ERROR\n");
+                    while (true) {
+                        f_read(&fil, input_buf, BUF_MAX, &read_size);
+
+                        // TODO: send data to mp3 deccode
+                        xQueueSend(sdToMp3Size, &read_size, portMAX_DELAY);
+                        xQueueSend(sdToMp3Data, input_buf, portMAX_DELAY);
+
+                        if (read_size < BUF_MAX) {
+                            if (f_eof(&fil)) {
+                                //locking_printf("EOF reach\n");
+                            } else {
+                                //locking_printf("ERROR\n");
+                            }
+                            //locking_printf("File size: %f kB, %f MB\n", (float)file_size / 1024.0, (float)file_size / 1024.0 / 1024.0);
+                            break;
+                        }
+                    }
+                }
+                fr = f_findnext(&dir, &fno);
             }
-            printf("File size: %f kB, %f MB\n", (float)file_size / 1024.0, (float)file_size / 1024.0 / 1024.0);
-            break;
+            f_closedir(&dir);
         }
     }
 }
@@ -139,7 +162,6 @@ void pcmDataCallback(libmad::MadAudioInfo &info, int16_t *pwm_buffer, size_t len
         xQueueSend(mp3ToI2s, pwm_buffer, portMAX_DELAY);
     }
 }
-
 
 static void mp3(void *pvParameters) {
     unsigned char decode_buf[MAX_DECODE_BUF];
@@ -191,56 +213,64 @@ static void i2s(void *pvParameters) {
 }
 
 static void wifi(void *pvParameters) {
-    printf("Start wifi task\n");
+    locking_printf("Start wifi task\n");
     if (cyw43_arch_init())
     {
-        printf("failed to initialise\n");
+        locking_printf("failed to initialise\n");
         return;
     }
+    locking_printf("Done init arch\n");
+
+    xTaskCreate(sd, "SD", BUF_MAX + 256, NULL, 29, &sdTask);
+    xTaskCreate(mp3, "MP3", MAX_DECODE_BUF + BUF_MAX + 1024 + 1152 + 256, NULL, 29, &mp3Task);
+    xTaskCreate(i2s, "I2S", 1152 + 256, NULL, 30, &i2sTask);
 
     cyw43_arch_enable_sta_mode();
-    printf("Connecting to WiFi...\n");
+    locking_printf("Connecting to WiFi...\n");
     if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 30000))
     {
-        printf("failed to connect.\n");
+        locking_printf("failed to connect.\n");
         exit(1);
     }
     else
     {
-        printf("Connected.\n");
+        locking_printf("Connected.\n");
     }
     
     int server_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
     struct sockaddr_in listen_addr;
+    bzero(&listen_addr, sizeof(listen_addr));
     listen_addr.sin_len = sizeof(struct sockaddr_in);
     listen_addr.sin_family = AF_INET;
-    listen_addr.sin_port = htons(1234);
+    listen_addr.sin_port = htons(8080);
     
     if (server_sock < 0)
     {
-        printf("Unable to create socket: error %d", errno);
+        locking_printf("Unable to create socket: error %d", errno);
         return;
     }
 
     if (bind(server_sock, (struct sockaddr *)&listen_addr, sizeof(listen_addr)) < 0)
     {
-        printf("Unable to bind socket: error %d\n", errno);
+        locking_printf("Unable to bind socket: error %d\n", errno);
         return;
     }
 
     if (listen(server_sock, 3) < 0)
     {
-        printf("Unable to listen on socket: error %d\n", errno);
+        locking_printf("Unable to listen on socket: error %d\n", errno);
         return;
     }
 
-    printf("Starting server at %s on port %u\n", ip4addr_ntoa(netif_ip4_addr(netif_list)), ntohs(listen_addr.sin_port));
+    locking_printf("Starting server at %s on port %u\n", ip4addr_ntoa(netif_ip4_addr(netif_list)), ntohs(listen_addr.sin_port));
 
     while (true)
     {
         struct sockaddr_storage remote_addr;
         socklen_t len = sizeof(remote_addr);
+        locking_printf("Wait conncection!\n");
         int conn_sock = accept(server_sock, (struct sockaddr *)&remote_addr, &len);
+        locking_printf("Got conncection!\n");
         if (conn_sock >= 0) {
             IMessage* clientMessage = r(conn_sock);
 
@@ -262,6 +292,7 @@ int main() {
 
     sleep_ms(5000);
     printf("pico Player\n");
+    printf("Begging free heap size %d\n", xPortGetFreeHeapSize());
 
     // init
     init();
@@ -272,12 +303,19 @@ int main() {
     mp3ToI2s = xQueueCreate(2, 1152 * 2);
 
     // create tasks
-    xTaskCreate(sd, "SD", 2 * BUF_MAX + 256, NULL, 30, &sdTask);
-    xTaskCreate(mp3, "MP3", MAX_DECODE_BUF + BUF_MAX + 1024 + 1152 + 256, NULL, 30, &mp3Task);
-    xTaskCreate(i2s, "I2S", 1152 * 2 + 256, NULL, 31, &i2sTask);
-    xTaskCreate(wifi, "WiFi", 300, NULL, 30, &wifiTask);
+    xTaskCreate(wifi, "WiFi", 256, NULL, 31, &wifiTask);
+    //xTaskCreate(sd, "SD", BUF_MAX + 256, NULL, 29, &sdTask);
+    //xTaskCreate(mp3, "MP3", MAX_DECODE_BUF + BUF_MAX + 1024 + 1152 + 256, NULL, 29, &mp3Task);
+    //xTaskCreate(i2s, "I2S", 1152 + 256, NULL, 30, &i2sTask);
+    
     // create semaphore
     songNameSemaphore = xSemaphoreCreateMutex();
+    printfMutex = xSemaphoreCreateMutex();
+
+    //vTaskCoreAffinitySet(wifiTask, (1 << 0));
+    /*vTaskCoreAffinitySet(sdTask, (1 << 1));
+    vTaskCoreAffinitySet(mp3Task, (1 << 1));
+    vTaskCoreAffinitySet(i2sTask, (1 << 1));*/
 
     // start OS
     vTaskStartScheduler();
