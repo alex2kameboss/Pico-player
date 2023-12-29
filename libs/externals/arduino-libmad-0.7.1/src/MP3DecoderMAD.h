@@ -197,7 +197,7 @@ class MP3DecoderMAD  {
         }
 
         /// Makes the mp3 data available for decoding: however we recommend to provide the data via a callback or input stream
-        size_t write(const void *in_ptr, size_t in_size) {
+        size_t give_data(const void *in_ptr, size_t in_size) {
             size_t result = 0;
             if (active){
                 LOG(Debug, "write %zu", in_size);
