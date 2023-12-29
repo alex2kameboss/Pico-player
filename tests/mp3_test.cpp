@@ -7,10 +7,15 @@
 #include "pico/binary_info.h"
 bi_decl(bi_3pins_with_names(PICO_AUDIO_I2S_DATA_PIN, "I2S DIN", PICO_AUDIO_I2S_CLOCK_PIN_BASE, "I2S BCK", PICO_AUDIO_I2S_CLOCK_PIN_BASE+1, "I2S LRCK"));
 
-#include <mp3_decoder/mp3_decoder.h>
+#define MAD_MAX_RESULT_BUFFER_SIZE 1152
+#include <MP3DecoderMAD.h>
+
 #include <string.h>
 
+
 #define BUF_MAX 2 * 1024
+
+using namespace libmad;
 
 struct audio_buffer_pool *init_audio() {
 
@@ -47,6 +52,27 @@ struct audio_buffer_pool *init_audio() {
     return producer_pool;
 }
 
+struct audio_buffer_pool *ap = NULL;
+
+void pcmDataCallback(MadAudioInfo &info, int16_t *pwm_buffer, size_t len) {
+    printf("New data: %d\n", len);
+    audio_buffer_t *buffer = take_audio_buffer(ap, true);
+    int16_t* samples = (int16_t*) buffer->buffer->bytes;
+    buffer->sample_count = 0;
+    for (size_t i=0; i<len; i++){
+        if (buffer->sample_count == buffer->max_sample_count) {
+            printf("Play buffer: %d\n", buffer->sample_count);
+            give_audio_buffer(ap, buffer);
+            buffer = take_audio_buffer(ap, true);
+            samples = (int16_t*) buffer->buffer->bytes;
+            buffer->sample_count = 0;
+        }
+        samples[i] = pwm_buffer[i];
+        buffer->sample_count++;
+    }
+    printf("Play buffer: %d\n", buffer->sample_count);
+    give_audio_buffer(ap, buffer);
+}
 
 int main() {
     // start uart
@@ -71,7 +97,7 @@ int main() {
 
     fr = f_open(&fil, "test.mp3", FA_READ);
 
-    struct audio_buffer_pool *ap = init_audio();
+    ap = init_audio();
     int16_t buf_s16[1152];
     uint8_t m_inBuff[1600];
     
@@ -86,78 +112,22 @@ int main() {
     int count = 0;
     int errors = 0;
 
+    MP3DecoderMAD mp3(pcmDataCallback);
+    mp3.begin();
+
     while (true) {
         f_read(&fil, input_buf, BUF_MAX, &read_size);
 
-        if (buf_size == 0) {
-            memcpy(decode_buf, input_buf, read_size);
-            buf_size += read_size;
-        } else {
-            if (read_size > 0) {
-                memcpy(decode_buf + BUF_MAX, input_buf, read_size);
-                buf_size += read_size;
-            }
-            while (true) {
-                count++;
-                // printf("Skip: %d\n", skip);
-                int next_sync = MP3FindSyncWord(decode_buf + skip, buf_size - skip);
-                if (next_sync == -1) {
-                    // printf("Syncword not found\n");
-                    skip = BUF_MAX;
-                } else if (next_sync == 0) {
-                    int bytesLeft = buf_size - skip;
-                    // printf("Decode frame\n");
-                    int ret = MP3Decode(decode_buf + skip, &bytesLeft, buf_s16, 0);
-                    if (buf_size - skip == bytesLeft) {
-                        // printf("Miss syncword\n");
-                        skip += 2; // miss sync bytes, skipt 2 bytes and search again
-                    } else {
-                        skip += buf_size - skip - bytesLeft;
+        if (buf_size + read_size > BUF_MAX) {
+            int jump = mp3.write(decode_buf, buf_size);
+            if (jump == 0)
+                jump = BUF_MAX;
+            buf_size -= BUF_MAX;
+            memcpy(decode_buf, decode_buf + jump, buf_size);
 
-                        if (ret == 0) {
-                            int play = 1152;
-                            while (play > 0) {
-                                // printf("Create buf %d\n", play);
-                                audio_buffer_t *buffer = take_audio_buffer(ap, true);
-                                int16_t* samples = (int16_t*) buffer->buffer->bytes;
-                                int16_t* buf = buf_s16 + (1152 - play);
-
-                                if (play >= buffer->max_sample_count) {
-                                    buffer->sample_count = buffer->max_sample_count;
-                                    play -= buffer->max_sample_count;
-                                } else {
-                                    buffer->sample_count = play;
-                                    play = 0;
-                                }
-
-
-                                for (int i = 0; i < buffer->sample_count; i++) {
-                                    samples[i*2+0] = buf[i*2+0] / 4;
-                                    samples[i*2+1] = buf[i*2+1] / 4;
-                                }
-
-                                // printf("Play buf\n");
-                                give_audio_buffer(ap, buffer);
-                            }
-                        } else {
-                            // printf("Decode error: %d\n", ret);
-                        }
-                    }
-                } else {
-                    // printf("Skip frame\n");
-                    skip += next_sync;
-                }
-            
-                //printf("samples: %d, frame: %d\n", samples, info.frame_bytes);
-                if (skip >= BUF_MAX) {
-                    // printf("Reach buf limit\n");
-                    memcpy(decode_buf, decode_buf + BUF_MAX, BUF_MAX);
-                    skip -= BUF_MAX;
-                    buf_size -= BUF_MAX;
-                    break;
-                }
-            }
         }
+        memcpy(decode_buf + buf_size, input_buf, read_size);
+        buf_size += read_size;
 
         file_size += read_size;
         if (read_size < BUF_MAX) {
