@@ -1,3 +1,0 @@
-[submodule "libs/externals/libmad"]
-	path = libs/externals/libmad
-	url = https://github.com/pschatzmann/arduino-libmad
